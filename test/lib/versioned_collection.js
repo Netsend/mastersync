@@ -3230,6 +3230,7 @@ describe('versioned_collection', function() {
     var C  = { _id : { _id: 'foo', _v: 'C', _pa: ['B'] } };
     var D  = { _id : { _id: 'foo', _v: 'D', _pa: ['C'] } };
     var E  = { _id : { _id: 'foo', _v: 'E', _pa: ['B'] } };
+    var Ec = { _id : { _id: 'foo', _v: 'E', _pa: ['B'] }, _m3: {_c: true } };
     var F  = { _id : { _id: 'foo', _v: 'F', _pa: ['E', 'C'] } };
     var G  = { _id : { _id: 'foo', _v: 'G', _pa: ['F'] } };
     var H  = { _id : { _id: 'foo', _v: 'H', _pa: ['F'] } };
@@ -3387,6 +3388,26 @@ describe('versioned_collection', function() {
       var DAG = [Ld, M];
       var branchHeads = VersionedCollection._branchHeads(DAG, true);
       should.deepEqual(branchHeads, [M]);
+    });
+
+    it('should find C, Ec', function() {
+      // structure:
+      //    A <-- B <-- C
+      //          \
+      //           Ec
+      var DAG = [A, B, C, Ec];
+      var branchHeads = VersionedCollection._branchHeads(DAG, true, true);
+      should.deepEqual(branchHeads, [C, Ec]);
+    });
+
+    it('should find only C, when omitting conflicts', function() {
+      // structure:
+      //    A <-- B <-- C
+      //          \
+      //           Ec
+      var DAG = [A, B, C, Ec];
+      var branchHeads = VersionedCollection._branchHeads(DAG, true, false);
+      should.deepEqual(branchHeads, [C]);
     });
   });
 
@@ -4361,6 +4382,61 @@ describe('versioned_collection', function() {
     });
   });
 
+  describe('fixConsistency', function() {
+    var collectionName = 'fixConsistency';
+
+    var A = { _id: { _id: 'foo', _v: 'A', _pe: 'I', _pa: [] } };
+    var B = { _id: { _id: 'bar', _v: 'B', _pe: 'I', _pa: []} };
+    var C = { _id: { _id: 'qux', _v: 'C', _pe: 'I', _pa: [] } };
+
+    var snap1;
+
+    it('should process the items the same way as addAllToDAG', function(done){
+      var itemsA;
+      var vcA = new VersionedCollection(db, 'fixConsistencyA', { hide: true });
+      var vcB = new VersionedCollection(db, 'fixConsistencyB', { hide: true });
+      vcA._addAllToDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+        vcA._snapshotCollection.find().toArray(function(err, itemsA) {
+          vcB._ensureAllInDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+            vcB._snapshotCollection.find().toArray(function(err, itemsB) {
+              should.deepEqual(itemsA[0]._id._v, itemsB[0]._id._v);
+              should.deepEqual(itemsA[1]._id._v, itemsB[1]._id._v);
+              should.deepEqual(itemsA[2]._id._v, itemsB[2]._id._v);
+              done();
+            });
+          });
+        });
+      });
+    });
+
+    it('should not add the same version twice and raise an error', function(done) {
+      var collectionName = 'fixConsistency1';
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._addAllToDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+        if (err) { throw err; return; }
+        vc._addAllToDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+          should.equal(err.message, 'version already exists');
+          done();
+        });
+      });
+    });
+
+    it('should not add the same version twice and NOT raise an error', function(done) {
+      var collectionName = 'fixConsistency2';
+      var vc = new VersionedCollection(db, collectionName, { hide: true, debug: false });
+      var vc2 = new VersionedCollection(db, collectionName, { hide: true, debug: false });
+      vc._ensureAllInDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+        if (err) { throw err; return; }
+        vc2._ensureAllInDAG([{ item: A }, { item: B }, { item:C }], function(err) {
+          vc2._snapshotCollection.find().toArray(function(err, items) {
+            should.equal(items.length, 6);
+          });
+          done();
+        });
+      });
+    });
+  });
+
   describe('_ensureLocalPerspective', function() {
     var collectionName = '_ensureLocalPerspective';
 
@@ -4507,6 +4583,92 @@ describe('versioned_collection', function() {
           { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'I', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
         ]);
         done();
+      });
+    });
+
+    it('should not create multiple new items if the result in DAG having multiple heads', function(done) {
+      var vc = new VersionedCollection(db, '_ensureLocalPerspective2', { debug: false, hide: true, localPerspective: 'I' });
+      var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'II', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item2 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item3 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      vc._ensureLocalPerspective([ item1, item2, item3 ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        should.deepEqual(newLocalItemsProcess, [
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'I', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'I', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'I', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } }
+        ]);
+        done();
+      });
+    });
+  });
+
+  describe('_ensureOneHead', function(){
+    it('should return A', function(done) {
+      var collectionName = 'ensureOneHead';
+
+      var A = { _id: { _id: 'foo', _v: 'A', _pe: 'I', _pa: [] }, _m3: {} };
+      var B = { _id: { _id: 'foo', _v: 'B', _pe: 'I', _pa: [] }, _m3: {} };
+      var C = { _id: { _id: 'foo', _v: 'C', _pe: 'I', _pa: [] }, _m3: {} };
+
+      var items = [A, B, C];
+
+      var vc = new VersionedCollection(db, collectionName, { hide: true, debug: false });
+      vc._ensureOneHead(items, function(err, nonConflictedHeads) {
+        if (err) { throw err; }
+        should.deepEqual(nonConflictedHeads, [A]);
+        done();
+      });
+    });
+
+    it('should return B as head', function(done){
+      var vc = new VersionedCollection(db, '_ensureLocalPerspective2', { debug: false, hide: true, localPerspective: 'I' });
+      var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'II', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item2 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item3 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      vc._ensureLocalPerspective([ item1, item2, item3 ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        vc._ensureOneHead(newLocalItems, function(err, nonConflictedHeads){
+          should.deepEqual(nonConflictedHeads, [newLocalItems[1]]);
+          done();
+        });
+      });
+    });
+  });
+
+  describe('_markConflicts', function() {
+    var collectionName = 'markConflicts';
+
+    var A = { _id: { _id: 'foo', _v: 'A', _pe: 'I', _pa: [] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0)}, foo1: '-1' };
+    var B = { _id: { _id: 'foo', _v: 'B', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo2: '0' };
+    var C = { _id: { _id: 'foo', _v: 'C', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo3: '1' };
+    var D = { _id: { _id: 'foo', _v: 'D', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo4: '2' };
+
+    it('should mark C and D as conflict', function(done){
+      var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
+      vc._ensureLocalPerspective2([ A, B, C, D ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        vc._ensureOneHead(newLocalItems, function(err){
+          should.deepEqual(newLocalItems[0]._m3._c, undefined);
+          should.deepEqual(newLocalItems[1]._m3._c, undefined);
+          should.deepEqual(newLocalItems[2]._m3._c, true);
+          should.deepEqual(newLocalItems[3]._m3._c, true);
+          done();
+        });
+      });
+    });
+
+    it('should mark C and D as conflict and write it to snapshotcollection', function(done){
+      var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
+      vc._ensureAllInDAG([ {item: A}, {item: B}, {item: C}, {item: D} ], function(err) {
+        if (err) { throw err; }
+        vc._snapshotCollection.find().toArray(function(err, items) {
+          should.deepEqual(items[4]._m3._c, undefined);
+          should.deepEqual(items[5]._m3._c, undefined);
+          should.deepEqual(items[6]._m3._c, true);
+          should.deepEqual(items[7]._m3._c, true);
+          done();
+        });
       });
     });
   });
@@ -5649,6 +5811,68 @@ describe('versioned_collection', function() {
         done();
       });
     });  
+  });
+
+  describe('determineRemoteOffset', function() {
+    var collectionName = 'determineRemoteOffset';
+    var perspective = '_local';
+
+    var snapshots = [
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'sZCqUpY6', '_pa' : [  'X2Sx6rXK' ], '_pe' : '_local', '_i' : 42 },
+        '_m3' : { '_ack' : true, '_op' : new Timestamp(1415807848, 7) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'X2Sx6rXK', '_pa' : [  '/TPEqPum' ], '_pe' : '_local', '_i' : 41 },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : '/TPEqPum', '_pa' : [  'daiye3wo' ], '_pe' : '_local', '_i' : 40 },
+        '_m3' : { '_ack' : true, '_op' : new Timestamp(1415807844, 6) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'daiye3wo', '_pe' : '_local', '_pa' : [ ], '_lo' : true, '_i' : 1 },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'daiye3wo', '_pa' : [ ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : '/TPEqPum', '_pa' : [  'daiye3wo' ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'X2Sx6rXK', '_pa' : [  '/TPEqPum' ], '_pe' : 'euromastercontracts' },
+        '_m3' : {  } }
+    ];
+
+    var extraSnapshot = { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'sZCqUpY6', '_pa' : [  'X2Sx6rXK' ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } };
+
+    it('should callback with null when no snapshots', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, null);
+        done();
+      });
+    });
+
+    it('should save DAG', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc._snapshotCollection.insert(snapshots, {w: 1}, done);
+    });
+
+    it('should callback with the last received snapshot version for the perspective', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, 'X2Sx6rXK');
+        done();
+      });
+    });
+
+    it('should save extra DAG', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc._snapshotCollection.insert(extraSnapshot, {w: 1}, done);
+    });
+
+    it('should callback with the new last received snapshot version for the perspective', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, 'sZCqUpY6');
+        done();
+      });
+    }); 
   });
 
   describe('_generateRandomVersion', function() {
