@@ -3230,6 +3230,7 @@ describe('versioned_collection', function() {
     var C  = { _id : { _id: 'foo', _v: 'C', _pa: ['B'] } };
     var D  = { _id : { _id: 'foo', _v: 'D', _pa: ['C'] } };
     var E  = { _id : { _id: 'foo', _v: 'E', _pa: ['B'] } };
+    var Ec = { _id : { _id: 'foo', _v: 'E', _pa: ['B'] }, _m3: {_c: true } };
     var F  = { _id : { _id: 'foo', _v: 'F', _pa: ['E', 'C'] } };
     var G  = { _id : { _id: 'foo', _v: 'G', _pa: ['F'] } };
     var H  = { _id : { _id: 'foo', _v: 'H', _pa: ['F'] } };
@@ -3387,6 +3388,26 @@ describe('versioned_collection', function() {
       var DAG = [Ld, M];
       var branchHeads = VersionedCollection._branchHeads(DAG, true);
       should.deepEqual(branchHeads, [M]);
+    });
+
+    it('should find C, Ec', function() {
+      // structure:
+      //    A <-- B <-- C
+      //          \
+      //           Ec
+      var DAG = [A, B, C, Ec];
+      var branchHeads = VersionedCollection._branchHeads(DAG, true, true);
+      should.deepEqual(branchHeads, [C, Ec]);
+    });
+
+    it('should find only C, when omitting conflicts', function() {
+      // structure:
+      //    A <-- B <-- C
+      //          \
+      //           Ec
+      var DAG = [A, B, C, Ec];
+      var branchHeads = VersionedCollection._branchHeads(DAG, true, false);
+      should.deepEqual(branchHeads, [C]);
     });
   });
 
@@ -3699,15 +3720,364 @@ describe('versioned_collection', function() {
     });
   });
 
-  describe('_addAllToDAG', function() {
+  describe('_ensureSamePerspective', function(){
+    var collectionName = '_ensureSamePerspective';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._ensureSamePerspective(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should callback with perspective of items when they are the same', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
+      vc._ensureSamePerspective([{ item: item1},{ item: item2}], function(err, per) {
+        should.equal(per, 'bar');
+        done();
+      });
+    });
+
+    it('should callback with error if perspectives are not the same', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'foo', _pa: [] } };
+      vc._ensureSamePerspective([{ item: item1},{ item: item2}], function(err) {
+        should.equal(err.message, 'perspective mismatch');
+        done();
+      });
+    });
+  });
+
+  describe('_ensureM3', function(){
+    var collectionName = '_ensureM3';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._ensureM3(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should add m3 to items that have no m3', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
+      vc._ensureM3([{ item: item1},{ item: item2}], function(err) {
+        if (err) { throw err; }
+        should.deepEqual(item1, { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } });
+        should.deepEqual(item2, { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } });
+        done();
+      });
+    });
+
+    it('should not change m3 of items that have m3', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] }, _m3: { _ack: true, _op: new Timestamp(1, 2) } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'foo', _pa: [] }, _m3: { _ack: true, _op: new Timestamp(3, 4) } };
+      vc._ensureM3([{ item: item1},{ item: item2}], function(err) {
+        if (err) { throw err; }
+        should.deepEqual(item1, { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] }, _m3: { _ack: true, _op: new Timestamp(1, 2) } });
+        should.deepEqual(item2, { _id: { _id: 'foo', _v: 'B', _pe: 'foo', _pa: [] }, _m3: { _ack: true, _op: new Timestamp(3, 4) } });
+        done();
+      });
+    });
+  });
+
+  describe('_checkAncestry', function() {
+    var collectionName = '_checkAncestry';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._checkAncestry(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should extract all items and return these', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'bar', _v: 'B', _pe: 'foo', _pa: [] } };
+      vc._checkAncestry([{ item: item1},{ item: item2}], function(err, allItems) {
+        if (err) { throw err; }
+        should.deepEqual(allItems,[item1, item2]);
+        done();
+      });
+    });
+
+    it('should throw an error when root is preceded', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'foo', _pa: [] } };
+      vc._checkAncestry([{ item: item1},{ item: item2}], function(err) {
+        if (err && err.message!=='root preceded') { throw err; }
+        should.equal(err.message, 'root preceded');
+        done();
+      });
+    });
+
+    it('should collect items in DAGs and return these', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'bar', _v: 'B', _pe: 'foo', _pa: [] } };
+      vc._checkAncestry([{ item: item1},{ item: item2}], function(err, allItems, DAGs) {
+        if (err) { throw err; }
+        should.deepEqual(DAGs,{
+          'foo':[{ _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } }],
+          'bar':[{ _id: { _id: 'bar', _v: 'B', _pe: 'foo', _pa: [] } }]
+        });
+        done();
+      });
+    });
+
+    it('should record new roots and return these', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'bar', _v: 'B', _pe: 'foo', _pa: [] } };
+      vc._checkAncestry([{ item: item1},{ item: item2}], function(err, allItems, DAGs, newRoots) {
+        if (err) { throw err; }
+        should.deepEqual(newRoots,{ 'foo' : true, 'bar' : true });
+        done();
+      });
+    });
+
+    it('should connect new roots if previous item is a deletion', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [], _d: true } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
+      vc._checkAncestry([{ item: item1},{ item: item2}], function(err, allItems, DAGs) {
+        if (err) { throw err; }
+        should.deepEqual(DAGs, {
+          'foo':[
+            { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [], _d: true } },
+            { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: ['A'] } }
+          ]});
+        done();
+      });
+    });
+  });
+
+  describe('_ensureVirtualCollection', function(){
+    var collectionName = '_ensureVirtualCollection';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._ensureVirtualCollection(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should create a virtual collection if none exists', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      should.equal(vc._virtualCollection, null);
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
+      var item3 = { _id: { _id: 'bar', _v: 'C', _pe: 'foo', _pa: [] } };
+      vc._ensureVirtualCollection([item1, item2, item3], function(err) {
+        if (err) { throw err; }
+        vc._virtualCollection.find().toArray(function(err, items) {
+          console.log(JSON.stringify(items));
+          should.deepEqual(items, [
+            {'_id':{'_id':'foo','_v':'A','_pe':'bar','_pa':[]}},
+            {'_id':{'_id':'foo','_v':'B','_pe':'bar','_pa':[]}},
+            {'_id':{'_id':'bar','_v':'C','_pe':'foo','_pa':[]}}]);
+        });
+        done();
+      });
+    });
+
+    it('should not create a virtual collection if one already exists', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      should.equal(vc._virtualCollection, null);
+      vc._ensureAllInDAG([{item: item1}], function(err){
+        if (err) { throw err; }
+        var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
+        var item3 = { _id: { _id: 'bar', _v: 'C', _pe: 'foo', _pa: [] } };
+        vc._ensureVirtualCollection([item2, item3], function(err) {
+          if (err) { throw err; }
+          vc._virtualCollection.find().toArray(function(err, items) {
+            should.deepEqual(items, [
+              {'_id':{'_id':'foo','_v':'A','_pe':'bar','_pa':[]},'_m3':{'_ack':false,'_op':new Timestamp(0, 0)}},
+              {'_id':{'_id':'foo','_v':'A','_pe':'_local','_pa':[],'_i':1},'_m3':{'_ack':false,'_op':new Timestamp(0, 0)}},
+              {'_id':{'_id':'foo','_v':'B','_pe':'bar','_pa':[]}},
+              {'_id':{'_id':'bar','_v':'C','_pe':'foo','_pa':[]}}]);
+          });
+          done();
+        });
+      });
+    });
+  });
+
+  describe('_checkParentsInVirtualCollection', function() {
+    var collectionName = '_checkParentsInVirtualCollection';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._checkParentsInVirtualCollection(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should return without error if parent is found', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: ['A'] } };
+
+      vc._ensureAllInDAG([{item: item1}], function(err){
+        if (err) { throw err; }
+
+        vc._checkParentsInVirtualCollection([item2], function(err) {
+          if (err) { throw err; }
+
+          done();
+        });
+      });
+    });
+
+    it('should return error if parent is not found', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: 'bar', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: ['A'] } };
+      var item3 = { _id: { _id: 'foo', _v: 'C', _pe: 'bar', _pa: ['B'] } };
+
+      vc._ensureAllInDAG([{item: item1}], function(err){
+        if (err) { throw err; }
+        vc._checkParentsInVirtualCollection([item2, item3], function(err) {
+          if (err && err.message!=='parent not found') { throw err; }
+          should.equal(err.message, 'parent not found');
+          done();
+        });
+      });
+    });
+  });
+
+  describe('_mergeNewHeads', function() {
+    var collectionName = '_mergeNewHeads';
+    it('should callback immediately when no items are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._mergeNewHeads(null, null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should require newRoots', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'] } };
+      vc._mergeNewHeads([item1, item2], null, function(err) {
+        if (err && err.message!=='provide newRoots') { throw err; }
+        should.equal(err.message, 'provide newRoots');
+        done();
+      });
+    });
+  });
+
+  describe('_syncLocalHeadsWithCollection', function(){
+    var collectionName = '_syncLocalHeadsWithCollection';
+    it('should callback immediately when no newLocalHeads are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._syncLocalHeadsWithCollection(null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+  });
+
+  describe('_ensureIntoSnapshot', function(){
+    var collectionName = '_ensureIntoSnapshot';
+    it('should require perspective', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._ensureIntoSnapshot(null, null, null, function(err) {
+        if (err && err.message!=='provide perspective') { throw err; }
+        should.equal(err.message, 'provide perspective');
+        done();
+      });
+    });
+
+    it('should callback immediately when no localItems are passed', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      vc._ensureIntoSnapshot('foo', null, null, function(err) {
+        if (err) { throw err; }
+        done();
+      });
+    });
+
+    it('should insert items into snapshot', function(done){
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'] } };
+      var item3 = { _id: { _id: 'foo', _v: 'C', _pe: 'bar', _pa: ['B'] } };
+
+      vc._ensureIntoSnapshot('foo', [item1, item2], [item3], function(err, newLocalHeads) {
+        if (err) { throw err; }
+
+        should.deepEqual(newLocalHeads, [{'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':2}}]);
+        vc._snapshotCollection.find().toArray(function(err, items) {
+          should.deepEqual(items, [
+            {'_id':{'_id':'foo','_v':'C','_pe':'bar','_pa':['B']}},
+            {'_id':{'_id':'foo','_v':'A','_pe':'_local','_pa':[],'_i':1}},
+            {'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':2}}
+          ]);
+          done();
+        });
+
+      });
+    });
+
+    it('should not insert items into snapshot twice', function(done){
+      var collectionName = '_ensureIntoSnapshot2';
+      var vc = new VersionedCollection(db, collectionName, { hide: true });
+      var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
+      var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'] } };
+      var item3 = { _id: { _id: 'foo', _v: 'C', _pe: 'bar', _pa: ['B'] } };
+
+      vc._ensureIntoSnapshot('foo', [item1, item2], [item3], function(err, newLocalHeads) {
+        if (err) { throw err; }
+
+        should.deepEqual(newLocalHeads, [{'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':2}}]);
+        vc._snapshotCollection.find().toArray(function(err, items) {
+          if (err) { throw err; }
+          should.deepEqual(items, [
+            {'_id':{'_id':'foo','_v':'C','_pe':'bar','_pa':['B']}},
+            {'_id':{'_id':'foo','_v':'A','_pe':'_local','_pa':[],'_i':1}},
+            {'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':2}}
+          ]);
+          vc._ensureIntoSnapshot('foo', [item1, item2], [item3], function(err, newLocalHeads2) {
+            if (err) { throw err; }
+            should.deepEqual(newLocalHeads2, [{'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':4}}]);
+
+            vc._snapshotCollection.find().toArray(function(err, items2) {
+              if (err) { throw err; }
+              should.deepEqual(items2, [
+                {'_id':{'_id':'foo','_v':'C','_pe':'bar','_pa':['B']}},
+                {'_id':{'_id':'foo','_v':'A','_pe':'_local','_pa':[],'_i':1}},
+                {'_id':{'_id':'foo','_v':'B','_pe':'_local','_pa':['A'],'_i':2}}
+              ]);
+              done();
+            });
+          });
+        });
+
+      });
+    });
+  });
+
+
+
+  describe('_ensureAllInDAG', function() {
     describe('one perspective', function() {
-      var collectionName = '_addAllToDAGOnePe';
+      var collectionName = '_ensureAllInDAGOnePe';
 
       it('should require all items to have the same perspective', function(done) {
         var vc = new VersionedCollection(db, collectionName, { hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
         var item2 = { _id: { _id: 'foo', _v: 'B', _pe: 'bar', _pa: [] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
+          console.log(err.message);
           should.equal(err.message, 'perspective mismatch');
           done();
         });
@@ -3717,28 +4087,35 @@ describe('versioned_collection', function() {
         var vc = new VersionedCollection(db, collectionName, { hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
         var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: [] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           should.equal(err.message, 'root preceded');
           done();
         });
       });
 
-      it('should require to have one head', function(done) {
+      it('should mark the extra head as conflict', function(done) {
         var vc = new VersionedCollection(db, collectionName, { hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
         var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'] } };
         var item3 = { _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: ['A'] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }, { item: item3 }], function(err) {
-          should.equal(err.message, 'not exactly one head');
-          done();
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }, { item: item3 }], function(err) {
+          if (err) { throw err; }
+          vc._snapshotCollection.findOne({'_id._id' : 'foo', '_id._v' : 'C', '_id._pe' : '_local'}, function(err, item) {
+            should.deepEqual(item, {
+              '_id':{'_id':'foo','_v':'C','_pe':'_local','_pa':['A'],'_i':3},
+              '_m3':{'_ack':false,'_op':new Timestamp(0, 0),'_c':true}}
+            );
+            done();
+          });
         });
       });
 
       it('should insert both items with root', function(done) {
+        var collectionName = '_ensureAllInDAGOnePe2';
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
         var item2 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -3768,14 +4145,14 @@ describe('versioned_collection', function() {
       it('should append item to previous items, fast-forward', function(done) {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: ['B'] } };
-        vc._addAllToDAG([{ item: item1 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
             if (err) { throw err; }
-            should.equal(items.length, 3);
-            should.deepEqual(items[2], {
-              _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: ['B'], _i: 3 },
+            should.equal(items.length, 4);
+            should.deepEqual(items[3], {
+              _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: ['B'], _i: 4 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) }
             });
 
@@ -3798,20 +4175,20 @@ describe('versioned_collection', function() {
         //                             D----
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'D', _pe: '_local', _pa: ['B'], _lo: true } };
-        vc._addAllToDAG([{ item: item1 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
             if (err) { throw err; }
-            should.equal(items.length, 5);
-            should.deepEqual(items[3], {
-              _id: { _id: 'foo', _v: 'D', _pe: '_local', _pa: ['B'], _lo: true, _i: 4 },
+            should.equal(items.length, 6);
+            should.deepEqual(items[4], {
+              _id: { _id: 'foo', _v: 'D', _pe: '_local', _pa: ['B'], _lo: true, _i: 5 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) }
             });
 
-            var v = items[4]._id._v;
-            should.deepEqual(items[4], {
-              _id: { _co: '_addAllToDAGOnePe', _id: 'foo', _v: v, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 5 },
+            var v = items[5]._id._v;
+            should.deepEqual(items[5], {
+              _id: { _co: '_ensureAllInDAGOnePe', _id: 'foo', _v: v, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 6 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) }
             });
 
@@ -3831,14 +4208,14 @@ describe('versioned_collection', function() {
 
     describe('one perspective delete', function() {
       describe('empty DAG all in memory', function() {
-        var collectionName = '_addAllToDAGOnePeDeleteMemory';
+        var collectionName = '_ensureAllInDAGOnePeDeleteMemory';
 
-        it('should not accept multiple heads', function(done) {
+        it('should not accept absence of referenced parent', function(done) {
           var vc = new VersionedCollection(db, collectionName, { hide: true });
           var A = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
           var B = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['C']} };
-          vc._addAllToDAG([{ item: A }, { item: B }], function(err) {
-            should.equal(err.message, 'not exactly one head');
+          vc._ensureAllInDAG([{ item: A }, { item: B }], function(err) {
+            should.equal(err.message, 'parent not found');
             done();
           });
         });
@@ -3846,7 +4223,7 @@ describe('versioned_collection', function() {
         it('should not accept any non-connected items', function(done) {
           var vc = new VersionedCollection(db, collectionName, { hide: true });
           var A = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: ['C'] } };
-          vc._addAllToDAG([{ item: A }], function(err) {
+          vc._ensureAllInDAG([{ item: A }], function(err) {
             should.equal(err.message, 'parent not found');
             done();
           });
@@ -3857,7 +4234,7 @@ describe('versioned_collection', function() {
           var A = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
           var B = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A']} };
           var C = { _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: [] } };
-          vc._addAllToDAG([{ item: A }, { item: B }, { item: C }], function(err) {
+          vc._ensureAllInDAG([{ item: A }, { item: B }, { item: C }], function(err) {
             should.equal(err.message, 'root preceded');
             done();
           });
@@ -3868,7 +4245,7 @@ describe('versioned_collection', function() {
           var A  = { _id: { _id: 'foo', _v: 'A', _pe: '_local', _pa: [] } };
           var Bd = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['A'], _d: true } };
           var C  = { _id: { _id: 'foo', _v: 'C', _pe: '_local', _pa: [] } };
-          vc._addAllToDAG([{ item: A }, { item: Bd }, { item: C }], function(err) {
+          vc._ensureAllInDAG([{ item: A }, { item: Bd }, { item: C }], function(err) {
             if (err) { throw err; }
             vc._snapshotCollection.find().toArray(function(err, items) {
               if (err) { throw err; }
@@ -3902,12 +4279,12 @@ describe('versioned_collection', function() {
       });
 
       describe('non-empty DAG', function() {
-        var collectionName = '_addAllToDAGOnePeDeleteSaved';
+        var collectionName = '_ensureAllInDAGOnePeDeleteSaved';
 
         it('needs a new root', function(done) {
           var vc = new VersionedCollection(db, collectionName, { debug: false });
           var D = { _id: { _id: 'foo', _v: 'D', _pe: '_local', _pa: [] } };
-          vc._addAllToDAG([{ item: D }], function(err) {
+          vc._ensureAllInDAG([{ item: D }], function(err) {
             if (err) { throw err; }
             vc._snapshotCollection.find().toArray(function(err, items) {
               if (err) { throw err; }
@@ -3933,7 +4310,7 @@ describe('versioned_collection', function() {
         it('should not accept any (non-deleted) items preceding a root', function(done) {
           var vc = new VersionedCollection(db, collectionName, { hide: true });
           var E  = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: [] } };
-          vc._addAllToDAG([{ item: E }], function(err) {
+          vc._ensureAllInDAG([{ item: E }], function(err) {
             should.equal(err.message, 'different root already in snapshot');
             done();
           });
@@ -3942,7 +4319,7 @@ describe('versioned_collection', function() {
         it('should delete item from collection', function(done) {
           var vc = new VersionedCollection(db, collectionName, { debug: false });
           var item = { _id: { _id: 'foo', _v: 'E', _pe: '_local', _pa: ['D'], _d: true } };
-          vc._addAllToDAG([{ item: item }], function(err) {
+          vc._ensureAllInDAG([{ item: item }], function(err) {
             if (err) { throw err; }
             vc._snapshotCollection.find().toArray(function(err, items) {
               if (err) { throw err; }
@@ -3964,7 +4341,7 @@ describe('versioned_collection', function() {
         it('should accept a new root if preceding item is a deletion', function(done) {
           var vc = new VersionedCollection(db, collectionName, { debug: false });
           var F  = { _id: { _id: 'foo', _v: 'F', _pe: '_local', _pa: [] } };
-          vc._addAllToDAG([{ item: F }], function(err) {
+          vc._ensureAllInDAG([{ item: F }], function(err) {
             if (err) { throw err; }
             vc._snapshotCollection.find().toArray(function(err, items) {
               if (err) { throw err; }
@@ -3991,13 +4368,13 @@ describe('versioned_collection', function() {
     });
 
     describe('one perspective multiple ids', function() {
-      var collectionName = '_addAllToDAGOnePeMultiId';
+      var collectionName = '_ensureAllInDAGOnePeMultiId';
 
       it('should insert both items with root', function(done) {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'X', _pe: '_local', _pa: [] } };
         var item2 = { _id: { _id: 'bar', _v: 'Y', _pe: '_local', _pa: [] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4033,7 +4410,7 @@ describe('versioned_collection', function() {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'B', _pe: '_local', _pa: ['X'] } };
         var item2 = { _id: { _id: 'bar', _v: 'C', _pe: '_local', _pa: ['Y'] } };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4069,7 +4446,7 @@ describe('versioned_collection', function() {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: 'foo', _v: 'D', _pe: '_local', _pa: ['X'], _lo: true }, d: true };
         var item2 = { _id: { _id: 'bar', _v: 'D', _pe: '_local', _pa: ['Y'], _lo: true }, d: true };
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4089,14 +4466,14 @@ describe('versioned_collection', function() {
 
             var v1 = items[6]._id._v;
             should.deepEqual(items[6], {
-              _id: { _co: '_addAllToDAGOnePeMultiId', _id: 'foo', _v: v1, _pe: '_local', _pa: ['B', 'D'], _lo: true, _i: 7 },
+              _id: { _co: '_ensureAllInDAGOnePeMultiId', _id: 'foo', _v: v1, _pe: '_local', _pa: ['B', 'D'], _lo: true, _i: 7 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) },
               d: true
             });
 
             var v2 = items[7]._id._v;
             should.deepEqual(items[7], {
-              _id: { _co: '_addAllToDAGOnePeMultiId', _id: 'bar', _v: v2, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 8 },
+              _id: { _co: '_ensureAllInDAGOnePeMultiId', _id: 'bar', _v: v2, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 8 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) },
               d: true
             });
@@ -4122,7 +4499,7 @@ describe('versioned_collection', function() {
     });
 
     describe('multiple perspective', function() {
-      var collectionName = '_addAllToDAGMultiplePe';
+      var collectionName = '_ensureAllInDAGMultiplePe';
 
       it('should insert both items with root', function(done) {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
@@ -4130,7 +4507,7 @@ describe('versioned_collection', function() {
         var item2 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'bar', _pa: ['A'] } };
         database.createCappedColl(vc.snapshotCollectionName, function(err) {
           if (err) { throw err; }
-          vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+          vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
             if (err) { throw err; }
             // inspect DAG
             vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4169,7 +4546,7 @@ describe('versioned_collection', function() {
       it('should append item to previous items, fast-forward', function(done) {
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'bar', _pa: ['B'] } };
-        vc._addAllToDAG([{ item: item1 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4210,7 +4587,7 @@ describe('versioned_collection', function() {
         //                             D'---
         var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
         var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'D', _pe: 'bar', _pa: ['B'] } };
-        vc._addAllToDAG([{ item: item1 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4227,7 +4604,7 @@ describe('versioned_collection', function() {
 
             var v = items[8]._id._v;
             should.deepEqual(items[8], {
-              _id: { _co: '_addAllToDAGMultiplePe', _id: new ObjectID('f00000000000000000000000'), _v: v, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 5 },
+              _id: { _co: '_ensureAllInDAGMultiplePe', _id: new ObjectID('f00000000000000000000000'), _v: v, _pe: '_local', _pa: ['C', 'D'], _lo: true, _i: 5 },
               _m3: { _ack: false, _op: new Timestamp(0, 0) }
             });
 
@@ -4250,7 +4627,7 @@ describe('versioned_collection', function() {
         var item1 = { _id: { _id: 'multi1', _v: 'A', _pe: 'remote', _pa: [] } };
         var item2 = { _id: { _id: 'multi2', _v: 'A', _pe: 'remote', _pa: [] } };
 
-        vc._addAllToDAG([{ item: item1 }, { item: item2 }], function(err) {
+        vc._ensureAllInDAG([{ item: item1 }, { item: item2 }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4296,7 +4673,7 @@ describe('versioned_collection', function() {
 
         var item = { _id: { _id: 'multi1', _v: 'B', _pe: '_local', _pa: ['A'] } };
 
-        vc._addAllToDAG([{ item: item }], function(err) {
+        vc._ensureAllInDAG([{ item: item }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4330,7 +4707,7 @@ describe('versioned_collection', function() {
 
         var item = { _id: { _id: 'multi1', _v: 'A', _pe: 'remote2', _pa: [] }, foo: 'bar' };
 
-        vc._addAllToDAG([{ item: item }], function(err) {
+        vc._ensureAllInDAG([{ item: item }], function(err) {
           if (err) { throw err; }
           // inspect DAG
           vc._snapshotCollection.find().toArray(function(err, items) {
@@ -4427,22 +4804,27 @@ describe('versioned_collection', function() {
       });
     });
 
-    it('should not create new items if item already exists (input _pe non-local)', function(done) {
+    it('should not create new items if item already exists (input _pe non-local), but should return that existing item', function(done) {
       var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true, localPerspective: 'I' });
       var item = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'II', _pa: [] } };
       vc._ensureLocalPerspective([ item ], function(err, newLocalItems) {
+        console.log(JSON.stringify(newLocalItems));
         if (err) { throw err; }
-        should.deepEqual(newLocalItems, []);
+        should.equal(newLocalItems.length, 1);
+        should.equal(newLocalItems[0]._m3._ack,true);
+        should.deepEqual(newLocalItems[0]._id, {'_id':new ObjectID('f00000000000000000000000'),'_v':'A','_pe':'I','_pa':[],'_i':1});
         done();
       });
     });
 
-    it('should not create new items if item already exists (input _pe new perspective', function(done) {
+    it('should not create new items if item already exists (input _pe new perspective), but should return existing item', function(done) {
       var vc = new VersionedCollection(db, collectionName, { debug: false, hide: false, localPerspective: 'I' });
       var item = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'III', _pa: [] } };
       vc._ensureLocalPerspective([ item ], function(err, newLocalItems) {
         if (err) { throw err; }
-        should.deepEqual(newLocalItems, []);
+        should.equal(newLocalItems.length, 1);
+        should.equal(newLocalItems[0]._m3._ack,true);
+        should.deepEqual(newLocalItems[0]._id, {'_id':new ObjectID('f00000000000000000000000'),'_v':'A','_pe':'I','_pa':[],'_i':1});
         done();
       });
     });
@@ -4507,6 +4889,93 @@ describe('versioned_collection', function() {
           { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'I', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
         ]);
         done();
+      });
+    });
+
+    it('should not create multiple new items if the result in DAG having multiple heads', function(done) {
+      var vc = new VersionedCollection(db, '_ensureLocalPerspective2', { debug: false, hide: true, localPerspective: 'I' });
+      var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'II', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item2 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item3 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      vc._ensureLocalPerspective([ item1, item2, item3 ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        should.deepEqual(newLocalItems, [
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'I', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'I', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } },
+          { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'I', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } }
+        ]);
+        done();
+      });
+    });
+  });
+
+  describe('_ensureOneHead', function(){
+    it('should return A', function(done) {
+      var collectionName = 'ensureOneHead';
+
+      var A = { _id: { _id: 'foo', _v: 'A', _pe: 'I', _pa: [] }, _m3: {} };
+      var B = { _id: { _id: 'foo', _v: 'B', _pe: 'I', _pa: [] }, _m3: {} };
+      var C = { _id: { _id: 'foo', _v: 'C', _pe: 'I', _pa: [] }, _m3: {} };
+
+      var items = [A, B, C];
+
+      var vc = new VersionedCollection(db, collectionName, { hide: true, debug: false });
+      vc._ensureOneHead(items, function(err, nonConflictedHeads) {
+        if (err) { throw err; }
+        should.deepEqual(nonConflictedHeads, [A]);
+        done();
+      });
+    });
+
+    it('should return B as head', function(done){
+      var vc = new VersionedCollection(db, '_ensureLocalPerspective2', { debug: false, hide: true, localPerspective: 'I' });
+      var item1 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'A', _pe: 'II', _pa: [] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item2 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'B', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      var item3 = { _id: { _id: new ObjectID('f00000000000000000000000'), _v: 'C', _pe: 'II', _pa: ['A'] }, _m3: { _ack: false, _op: new Timestamp(0, 0) } };
+      vc._ensureLocalPerspective([ item1, item2, item3 ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        vc._ensureOneHead(newLocalItems, function(err, nonConflictedHeads){
+          should.deepEqual(nonConflictedHeads, [newLocalItems[1]]);
+          done();
+        });
+      });
+    });
+  });
+
+  describe('_markConflicts', function() {
+    var collectionName = 'markConflicts';
+
+    var A = { _id: { _id: 'foo', _v: 'A', _pe: 'I', _pa: [] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0)}, foo1: '-1' };
+    var B = { _id: { _id: 'foo', _v: 'B', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo2: '0' };
+    var C = { _id: { _id: 'foo', _v: 'C', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo3: '1' };
+    var D = { _id: { _id: 'foo', _v: 'D', _pe: 'I', _pa: ['A'] }, _m3: { s:2, _ack: false, _op: new Timestamp(0, 0) }, foo4: '2' };
+
+    it('should mark C and D as conflict', function(done){
+      var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
+      vc._ensureLocalPerspective([ A, B, C, D ], function(err, newLocalItems) {
+        if (err) { throw err; }
+        vc._ensureOneHead(newLocalItems, function(err){
+          if (err) { throw err; }
+          should.deepEqual(newLocalItems[0]._m3._c, undefined);
+          should.deepEqual(newLocalItems[1]._m3._c, undefined);
+          should.deepEqual(newLocalItems[2]._m3._c, true);
+          should.deepEqual(newLocalItems[3]._m3._c, true);
+          done();
+        });
+      });
+    });
+
+    it('should mark C and D as conflict and write it to snapshotcollection', function(done){
+      var vc = new VersionedCollection(db, collectionName, { debug: false, hide: true });
+      vc._ensureAllInDAG([ {item: A}, {item: B}, {item: C}, {item: D} ], function(err) {
+        if (err) { throw err; }
+        vc._snapshotCollection.find().toArray(function(err, items) {
+          should.deepEqual(items[4]._m3._c, undefined);
+          should.deepEqual(items[5]._m3._c, undefined);
+          should.deepEqual(items[6]._m3._c, true);
+          should.deepEqual(items[7]._m3._c, true);
+          done();
+        });
       });
     });
   });
@@ -5165,7 +5634,7 @@ describe('versioned_collection', function() {
       });
 
       it('should merge if multiple heads are created and copy merge to collection', function(done) {
-        var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective, debug: true, hide: false });
+        var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective, debug: false });
         var oplogItem = {
           ts: new Timestamp(1414511144, 1),
           op: 'u',
@@ -5649,6 +6118,68 @@ describe('versioned_collection', function() {
         done();
       });
     });  
+  });
+
+  describe('determineRemoteOffset', function() {
+    var collectionName = 'determineRemoteOffset';
+    var perspective = '_local';
+
+    var snapshots = [
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'sZCqUpY6', '_pa' : [  'X2Sx6rXK' ], '_pe' : '_local', '_i' : 42 },
+        '_m3' : { '_ack' : true, '_op' : new Timestamp(1415807848, 7) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'X2Sx6rXK', '_pa' : [  '/TPEqPum' ], '_pe' : '_local', '_i' : 41 },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : '/TPEqPum', '_pa' : [  'daiye3wo' ], '_pe' : '_local', '_i' : 40 },
+        '_m3' : { '_ack' : true, '_op' : new Timestamp(1415807844, 6) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'daiye3wo', '_pe' : '_local', '_pa' : [ ], '_lo' : true, '_i' : 1 },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'daiye3wo', '_pa' : [ ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : '/TPEqPum', '_pa' : [  'daiye3wo' ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } },
+      { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'X2Sx6rXK', '_pa' : [  '/TPEqPum' ], '_pe' : 'euromastercontracts' },
+        '_m3' : {  } }
+    ];
+
+    var extraSnapshot = { '_id' : { '_co' : 'tyres', '_id' : '001309478', '_v' : 'sZCqUpY6', '_pa' : [  'X2Sx6rXK' ], '_pe' : 'euromastercontracts' },
+        '_m3' : { '_ack' : false, '_op' : new Timestamp(0, 0) } };
+
+    it('should callback with null when no snapshots', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, null);
+        done();
+      });
+    });
+
+    it('should save DAG', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc._snapshotCollection.insert(snapshots, {w: 1}, done);
+    });
+
+    it('should callback with the last received snapshot version for the perspective', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, 'X2Sx6rXK');
+        done();
+      });
+    });
+
+    it('should save extra DAG', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc._snapshotCollection.insert(extraSnapshot, {w: 1}, done);
+    });
+
+    it('should callback with the new last received snapshot version for the perspective', function(done) {
+      var vc = new VersionedCollection(db, collectionName, { localPerspective: perspective });
+      vc.determineRemoteOffset('euromastercontracts', function(err, result) {
+        if (err) { throw err; }
+        should.deepEqual(result, 'sZCqUpY6');
+        done();
+      });
+    }); 
   });
 
   describe('_generateRandomVersion', function() {
