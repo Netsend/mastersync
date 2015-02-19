@@ -39,6 +39,7 @@ program
   .option('-f, --config <config>', 'ini config file with database access credentials')
   .option('-a, --attribute <attribute>', 'name of attribute to lookup (and save) filename to, defaults to photos')
   .option('-s, --save', 'save filename to matching')
+  .option('--dry', 'in combination with save this outputs update queries, but does not execute them')
   .parse(process.argv);
 
 if (!program.database) { program.help(); }
@@ -99,14 +100,19 @@ function run(db) {
       var id = parts[1];
       var selector = { _id: id };
       selector[program.attribute] = basename;
+      var update = { '$push' : {} };
+      update['$push'][program.attribute] = basename;
 
       rl.pause();
 
-      if (!program.save) {
+      if (!program.save || program.dry) {
         coll.findOne(selector, function(err, found) {
           if (err) { console.log(err); }
           if (!err && !found) {
             console.log(filename);
+            if (program.dry) {
+              console.log(basename, selector, update);
+            }
           }
           processed++;
           rl.resume();
@@ -116,9 +122,6 @@ function run(db) {
         coll.findOne(selector, function(err, found) {
           if (err) { console.log(err); }
           if (!err && !found) {
-            var update = { '$push' : {} };
-            update['$push'][program.attribute] = basename;
-
             coll.update({ _id: id}, update, function(err, updates) {
               if (err) { console.log(err); }
               if (updates === 0) {
