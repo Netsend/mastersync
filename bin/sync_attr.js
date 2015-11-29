@@ -33,7 +33,7 @@ var syncAttr = require('../lib/sync_attr');
 
 program
   .version('0.0.1')
-  .usage('[-f config] [-v] -a database [-b database] -c collection [-d collection] attr')
+  .usage('[-f config] [-v] -a database [-b database] -c collection [-d collection] -m attr(s) attr')
   .description('synchronize attr on items in a.c from corresponding items in b.d')
   .option('-a, --database1 <database>', 'name of the database for collection1')
   .option('-b, --database2 <database>', 'name of the database for collection2 if different from database1')
@@ -43,8 +43,6 @@ program
   .option('-m, --match <attrs>', 'comma separated list of attributes that should match', function(val) { return val.split(','); })
   .option('    --ids <ids>', 'comma separated list of (string) ids to copy attr from b.d to a.c', function(val) { return val.split(','); })
   .option('    --oids <oids>', 'comma separated list of object ids to copy attr from b.d to a.c', function(val) { return val.split(','); })
-  .option('-i, --include <attrs>', 'comma separated list of attributes to include in comparison', function(val) { return val.split(','); })
-  .option('-e, --exclude <attrs>', 'comma separated list of attributes to exclude in comparison', function(val) { return val.split(','); })
   .option('-v, --verbose', 'verbose')
   .parse(process.argv);
 
@@ -81,16 +79,6 @@ if (program.config) {
 
 var attr = program.args[0];
 
-var excludeAttrs = {};
-(program.exclude || []).forEach(function(attr) {
-  excludeAttrs[attr] = true;
-});
-
-var includeAttrs = {};
-(program.include || []).forEach(function(attr) {
-  includeAttrs[attr] = true;
-});
-
 var matchAttrs = {};
 (program.match || []).forEach(function(attr) {
   matchAttrs[attr] = true;
@@ -98,8 +86,6 @@ var matchAttrs = {};
 
 var debug = !!program.verbose;
 
-if (debug && Object.keys(includeAttrs).length) { console.log('include:', program.include); }
-if (debug && Object.keys(excludeAttrs).length) { console.log('exclude:', program.exclude); }
 if (debug && Object.keys(matchAttrs).length) { console.log('match:', program.match); }
 
 //// phase 1: sync version numbers on equal objects if the rest of the object has equal attribute values
@@ -144,8 +130,6 @@ function run(db) {
     var tmpColl = db.db(program.database1).collection(program.collection1 + '.tmp');
 
     var opts = {
-      includeAttrs: includeAttrs,
-      excludeAttrs: excludeAttrs,
       matchAttrs: matchAttrs,
       debug: debug
     };

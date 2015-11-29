@@ -83,20 +83,20 @@ describe('syncAttr', function() {
       (function() { syncAttr(coll1, coll2, tmpColl, 'foo', 'foo', function() {}); }).should.throw('opts must be an object');
     });
 
-    it('should require opts.includeAttrs to be an object', function() {
-      (function() { syncAttr(coll1, coll2, tmpColl, 'foo', { includeAttrs: 'foo' }, function() {}); }).should.throw('opts.includeAttrs must be an object');
+    it('should require opts.includeAttrs to not exist', function() {
+      (function() { syncAttr(coll1, coll2, tmpColl, 'foo', { includeAttrs: 'foo' }, function() {}); }).should.throw('use of opts.includeAttrs is prohibited');
     });
 
-    it('should require opts.excludeAttrs to be an object', function() {
-      (function() { syncAttr(coll1, coll2, tmpColl, 'foo', { excludeAttrs: 'foo' }, function() {}); }).should.throw('opts.excludeAttrs must be an object');
+    it('should require opts.excludeAttrs to not exist', function() {
+      (function() { syncAttr(coll1, coll2, tmpColl, 'foo', { excludeAttrs: 'foo' }, function() {}); }).should.throw('use of opts.excludeAttrs is prohibited');
     });
 
-    it('should require attr to not be included for comparison', function() {
-      (function() { syncAttr(coll1, coll2, tmpColl, '_id', { includeAttrs: { _id: true } }, function() {}); }).should.throw('can not include attribute that is synced for comparison');
+    it('should require opts.matchAttrs', function() {
+      (function() { syncAttr(coll1, coll2, tmpColl, '_id', { }, function() {}); }).should.throw('provide opts.matchAttrs');
     });
 
     it('should return without error', function(done) {
-      syncAttr(coll1, coll2, tmpColl, 'foo', function(err) {
+      syncAttr(coll1, coll2, tmpColl, 'foo', { matchAttrs: { 'bar': true } }, function(err) {
         if (err) { throw err; }
         done();
       });
@@ -132,7 +132,7 @@ describe('syncAttr', function() {
     });
 
     it('should require the conditions not to resolve to multiple elements', function(done) {
-      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, excludeAttrs: { _id: true, qux: true, _v: true } }, function(err) {
+      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, matchAttrs: { bar: true } }, function(err) {
         should.equal(err.message, 'ambiguous elements in collection2');
         done();
       });
@@ -140,266 +140,146 @@ describe('syncAttr', function() {
   });
 
   describe('direct strategy', function() {
-    describe('using includeAttrs', function() {
-      var coll1, coll2;
+    var coll1, coll2;
 
-      it('needs collections', function(done) {
-        coll1 = db.collection(collName1 + 'DirectStrategyInclude');
-        coll2 = db.collection(collName2 + 'DirectStrategyInclude');
-        done();
-      });
+    it('needs collections', function(done) {
+      coll1 = db.collection(collName1 + 'DirectStrategyMatch');
+      coll2 = db.collection(collName2 + 'DirectStrategyMatch');
+      done();
+    });
 
-      it('needs some objects in both collections for further testing', function(done) {
-        var itemIS = { _id: 'S', bar: 'baz', _v: 'B' };
-        var itemIT = { _id: 'T', bar: 'baz', _v: 'B' };
-        var itemIU = { _id: 'U', bar: 'baz', _v: 'B' };
+    it('needs some objects in both collections for further testing', function(done) {
+      var itemIS = { _id: 'S', bar: 'baz', _v: 'B', an: ['foo', 'bar'] };
+      var itemIT = { _id: 'T', bar: 'baz', _v: 'B', an: ['foo', 'b4r'] };
+      var itemIU = { _id: 'U', bar: 'baz', _v: 'B', an: ['f00', 'bar'] };
 
-        var itemIIS = { _id: 'S', qux: 'raboof', _v: 'A' };
-        var itemIIT = { _id: 'T', qux: 'raboof', _v: 'A' };
-        var itemIIW = { _id: 'W', qux: 'raboof', _v: 'A' };
+      var itemIIS = { _id: 'S', qux: 'raboof', _v: 'A', an: ['f00', 'b4r'] };
+      var itemIIT = { _id: 'T', qux: 'raboof', _v: 'A', an: ['foo', 'bar'] };
+      var itemIIW = { _id: 'W', qux: 'raboof', _v: 'A', an: ['f00', 'bar'] };
 
-        coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+      coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+        if (err) { throw err; }
+        should.equal(inserted.length, 3);
+
+        coll2.insert([itemIIS, itemIIT, itemIIW], function(err, inserted) {
           if (err) { throw err; }
           should.equal(inserted.length, 3);
+          done();
+        });
+      });
+    });
 
-          coll2.insert([itemIIS, itemIIT, itemIIW], function(err, inserted) {
+    it('should not sync bar because matched on _v', function(done) {
+      syncAttr(coll1, coll2, tmpColl, 'bar', { debug: false, matchAttrs: { _v: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 0);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          if (err) { throw err; }
+          should.equal(items1.length, 3);
+
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(inserted.length, 3);
+            should.equal(items2.length, 3);
+
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz', _v: 'B', an: ['foo', 'bar'] },
+              { _id: 'T', bar: 'baz', _v: 'B', an: ['foo', 'b4r'] },
+              { _id: 'U', bar: 'baz', _v: 'B', an: ['f00', 'bar'] }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'S', qux: 'raboof', _v: 'A', an: ['f00', 'b4r'] },
+              { _id: 'T', qux: 'raboof', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'W', qux: 'raboof', _v: 'A', an: ['f00', 'bar'] }
+            ]);
             done();
-          });
-        });
-      });
-
-      it('should not sync _v because bar and qux are different and everything is included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'B' },
-                { _id: 'T', bar: 'baz', _v: 'B' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should not sync _v because qux is different and included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, includeAttrs: { qux: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'B' },
-                { _id: 'T', bar: 'baz', _v: 'B' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should not sync _v because bar and qux are different and everything is included and matched on _id', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, matchAttrs: { _id: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'B' },
-                { _id: 'T', bar: 'baz', _v: 'B' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should sync _v because only _id is included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, includeAttrs: { _id: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 2);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'A' },
-                { _id: 'T', bar: 'baz', _v: 'A' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
           });
         });
       });
     });
 
-    describe('using excludeAttrs', function() {
-      var coll1, coll2;
+    it('should not sync _v because matched on qux', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, matchAttrs: { qux: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 0);
 
-      it('needs collections', function(done) {
-        coll1 = db.collection(collName1 + 'DirectStrategyExclude');
-        coll2 = db.collection(collName2 + 'DirectStrategyExclude');
-        done();
-      });
-
-      it('needs some objects in both collections for further testing', function(done) {
-        var itemIS = { _id: 'S', bar: 'baz', _v: 'B' };
-        var itemIT = { _id: 'T', bar: 'baz', _v: 'B' };
-        var itemIU = { _id: 'U', bar: 'baz', _v: 'B' };
-
-        var itemIIS = { _id: 'S', qux: 'raboof', _v: 'A' };
-        var itemIIT = { _id: 'T', qux: 'raboof', _v: 'A' };
-        var itemIIW = { _id: 'W', qux: 'raboof', _v: 'A' };
-
-        coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.equal(inserted.length, 3);
+          should.equal(items1.length, 3);
 
-          coll2.insert([itemIIS, itemIIT, itemIIW], function(err, inserted) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(inserted.length, 3);
+            should.equal(items2.length, 3);
+
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz', _v: 'B', an: ['foo', 'bar'] },
+              { _id: 'T', bar: 'baz', _v: 'B', an: ['foo', 'b4r'] },
+              { _id: 'U', bar: 'baz', _v: 'B', an: ['f00', 'bar'] }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'S', qux: 'raboof', _v: 'A', an: ['f00', 'b4r'] },
+              { _id: 'T', qux: 'raboof', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'W', qux: 'raboof', _v: 'A', an: ['f00', 'bar'] }
+            ]);
             done();
           });
         });
       });
+    });
 
-      it('should not sync _v because bar and qux are different and not excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false }, function(err, updated) {
+    it('should sync _v because matched on _id', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, matchAttrs: { _id: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 2);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.strictEqual(updated, 0);
+          should.equal(items1.length, 3);
 
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(items1.length, 3);
+            should.equal(items2.length, 3);
 
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'B' },
-                { _id: 'T', bar: 'baz', _v: 'B' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'T', bar: 'baz', _v: 'A', an: ['foo', 'b4r'] },
+              { _id: 'U', bar: 'baz', _v: 'B', an: ['f00', 'bar'] }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'S', qux: 'raboof', _v: 'A', an: ['f00', 'b4r'] },
+              { _id: 'T', qux: 'raboof', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'W', qux: 'raboof', _v: 'A', an: ['f00', 'bar'] }
+            ]);
+            done();
           });
         });
       });
+    });
 
-      it('should not sync _v because qux is different and not excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, excludeAttrs: { bar: true } }, function(err, updated) {
+    it('should sync "an" (array) because matched on _id', function(done) {
+      syncAttr(coll1, coll2, tmpColl, 'an', { debug: false, matchAttrs: { _id: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 2);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.strictEqual(updated, 0);
+          should.equal(items1.length, 3);
 
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(items1.length, 3);
+            should.equal(items2.length, 3);
 
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'B' },
-                { _id: 'T', bar: 'baz', _v: 'B' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should sync _v because bar and qux are excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_v', { debug: false, excludeAttrs: { bar: true, qux: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 2);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 3);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz', _v: 'A' },
-                { _id: 'T', bar: 'baz', _v: 'A' },
-                { _id: 'U', bar: 'baz', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'S', qux: 'raboof', _v: 'A' },
-                { _id: 'T', qux: 'raboof', _v: 'A' },
-                { _id: 'W', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz', _v: 'A', an: ['f00', 'b4r'] },
+              { _id: 'T', bar: 'baz', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'U', bar: 'baz', _v: 'B', an: ['f00', 'bar'] }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'S', qux: 'raboof', _v: 'A', an: ['f00', 'b4r'] },
+              { _id: 'T', qux: 'raboof', _v: 'A', an: ['foo', 'bar'] },
+              { _id: 'W', qux: 'raboof', _v: 'A', an: ['f00', 'bar'] }
+            ]);
+            done();
           });
         });
       });
@@ -407,305 +287,151 @@ describe('syncAttr', function() {
   });
 
   describe('temp strategy, unique object', function() {
-    describe('using includeAttrs', function() {
-      var coll1, coll2;
+    var coll1, coll2;
 
-      it('needs collections', function(done) {
-        coll1 = db.collection(collName1 + 'TempStrategyInclude');
-        coll2 = db.collection(collName2 + 'TempStrategyInclude');
-        done();
-      });
+    it('needs collections', function(done) {
+      coll1 = db.collection(collName1 + 'TempStrategyInclude');
+      coll2 = db.collection(collName2 + 'TempStrategyInclude');
+      done();
+    });
 
-      it('needs some objects in both collections for further testing', function(done) {
-        var itemIS = { _id: 'S', bar: 'baz1', _v: 'B' };
-        var itemIT = { _id: 'T', bar: 'baz2', _v: 'B' };
-        var itemIU = { _id: 'U', bar: 'baz3', _v: 'B' };
+    it('needs some objects in both collections for further testing', function(done) {
+      var itemIS = { _id: 'S', bar: 'baz1', _v: 'B' };
+      var itemIT = { _id: 'T', bar: 'baz2', _v: 'B' };
+      var itemIU = { _id: 'U', bar: 'baz3', _v: 'B' };
 
-        var itemIIV = { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' };
-        var itemIIW = { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' };
-        var itemIIX = { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' };
-        var itemIIY = { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' };
+      var itemIIV = { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' };
+      var itemIIW = { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' };
+      var itemIIX = { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' };
+      var itemIIY = { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' };
 
-        coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+      coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+        if (err) { throw err; }
+        should.equal(inserted.length, 3);
+
+        coll2.insert([itemIIV, itemIIW, itemIIX, itemIIY], function(err, inserted) {
           if (err) { throw err; }
-          should.equal(inserted.length, 3);
+          should.equal(inserted.length, 4);
+          done();
+        });
+      });
+    });
 
-          coll2.insert([itemIIV, itemIIW, itemIIX, itemIIY], function(err, inserted) {
+    it('should not sync _id because matched on _v and qux', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, matchAttrs: { _v: true, qux: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 0);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          if (err) { throw err; }
+          should.equal(items1.length, 3);
+
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(inserted.length, 4);
+            should.equal(items2.length, 4);
+
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz1', _v: 'B' },
+              { _id: 'T', bar: 'baz2', _v: 'B' },
+              { _id: 'U', bar: 'baz3', _v: 'B' }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
+              { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
+              { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
+              { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
+            ]);
             done();
-          });
-        });
-      });
-
-      it('should not sync _id because the whole object is used by default', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should not sync _id because _v and qux are included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, includeAttrs: { _v: true, qux: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should not sync _id because _v is included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, includeAttrs: { _v: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should not sync _id because qux is included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, includeAttrs: { qux: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 0);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should sync _id because bar is included', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, includeAttrs: { bar: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 3);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'V', bar: 'baz1', _v: 'B' },
-                { _id: 'W', bar: 'baz3', _v: 'B' },
-                { _id: 'Y', bar: 'baz2', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
           });
         });
       });
     });
 
-    describe('using excludeAttrs', function() {
-      var coll1, coll2;
+    it('should not sync _id because matched on _v', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, matchAttrs: { _v: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 0);
 
-      it('needs collections', function(done) {
-        coll1 = db.collection(collName1 + 'TempStrategyExclude');
-        coll2 = db.collection(collName2 + 'TempStrategyExclude');
-        done();
-      });
-
-      it('needs some objects in both collections for further testing', function(done) {
-        var itemIS = { _id: 'S', bar: 'baz1', _v: 'B' };
-        var itemIT = { _id: 'T', bar: 'baz2', _v: 'B' };
-        var itemIU = { _id: 'U', bar: 'baz3', _v: 'B' };
-
-        var itemIIV = { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' };
-        var itemIIW = { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' };
-        var itemIIX = { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' };
-        var itemIIY = { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' };
-
-        coll1.insert([itemIS, itemIT, itemIU], function(err, inserted) {
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.equal(inserted.length, 3);
+          should.equal(items1.length, 3);
 
-          coll2.insert([itemIIV, itemIIW, itemIIX, itemIIY], function(err, inserted) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(inserted.length, 4);
+            should.equal(items2.length, 4);
+
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz1', _v: 'B' },
+              { _id: 'T', bar: 'baz2', _v: 'B' },
+              { _id: 'U', bar: 'baz3', _v: 'B' }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
+              { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
+              { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
+              { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
+            ]);
             done();
           });
         });
       });
+    });
 
-      it('should not sync _id because _v and qux are not excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false }, function(err, updated) {
+    it('should not sync _id because matched on qux', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, matchAttrs: { qux: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 0);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.strictEqual(updated, 0);
+          should.equal(items1.length, 3);
 
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(items1.length, 3);
+            should.equal(items2.length, 4);
 
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
+            should.deepEqual(items1, [
+              { _id: 'S', bar: 'baz1', _v: 'B' },
+              { _id: 'T', bar: 'baz2', _v: 'B' },
+              { _id: 'U', bar: 'baz3', _v: 'B' }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
+              { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
+              { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
+              { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
+            ]);
+            done();
           });
         });
       });
+    });
 
-      it('should not sync _id because qux is not excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, excludeAttrs: { _v: true } }, function(err, updated) {
+    it('should sync _id because matched on bar', function(done) {
+      syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, matchAttrs: { bar: true } }, function(err, updated) {
+        if (err) { throw err; }
+        should.strictEqual(updated, 3);
+
+        coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
           if (err) { throw err; }
-          should.strictEqual(updated, 0);
+          should.equal(items1.length, 3);
 
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
+          coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
             if (err) { throw err; }
-            should.equal(items1.length, 3);
+            should.equal(items2.length, 4);
 
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'S', bar: 'baz1', _v: 'B' },
-                { _id: 'T', bar: 'baz2', _v: 'B' },
-                { _id: 'U', bar: 'baz3', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
-          });
-        });
-      });
-
-      it('should sync _id because _v and qux are excluded', function(done) {
-        syncAttr(coll1, coll2, tmpColl, '_id', { debug: false, excludeAttrs: { _v: true, qux: true } }, function(err, updated) {
-          if (err) { throw err; }
-          should.strictEqual(updated, 3);
-
-          coll1.find({}, { sort: '_id' }).toArray(function(err, items1) {
-            if (err) { throw err; }
-            should.equal(items1.length, 3);
-
-            coll2.find({}, { sort: '_id' }).toArray(function(err, items2) {
-              if (err) { throw err; }
-              should.equal(items2.length, 4);
-
-              should.deepEqual(items1, [
-                { _id: 'V', bar: 'baz1', _v: 'B' },
-                { _id: 'W', bar: 'baz3', _v: 'B' },
-                { _id: 'Y', bar: 'baz2', _v: 'B' }
-              ]);
-              should.deepEqual(items2, [
-                { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
-                { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
-                { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
-                { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
-              ]);
-              done();
-            });
+            should.deepEqual(items1, [
+              { _id: 'V', bar: 'baz1', _v: 'B' },
+              { _id: 'W', bar: 'baz3', _v: 'B' },
+              { _id: 'Y', bar: 'baz2', _v: 'B' }
+            ]);
+            should.deepEqual(items2, [
+              { _id: 'V', bar: 'baz1', qux: 'raboof', _v: 'A' },
+              { _id: 'W', bar: 'baz3', qux: 'raboof', _v: 'A' },
+              { _id: 'X', bar: 'baz4', qux: 'raboof', _v: 'A' },
+              { _id: 'Y', bar: 'baz2', qux: 'raboof', _v: 'A' }
+            ]);
+            done();
           });
         });
       });
