@@ -39,6 +39,7 @@ program
   .option('    --oid <id>', 'show the log of one object id')
   .option('-f, --config <config>', 'ini config file with database access credentials')
   .option('-s, --show', 'show complete objects')
+  .option('    --json', 'format output as one json object per line (only with --show)')
   .option('    --ack', 'only show versions that are ackd')
   .option('    --nack', 'only show versions that are not ackd')
   .option('-p, --patch', 'show patch compared to previous version')
@@ -108,31 +109,36 @@ function fmtItem(item, parents) {
   var out = '';
   if (program.show) {
     // print tree
-    if (parents.length) {
-      out += '\u250f ';
-    } else {
-      out += '\u257a ';
+    if (!program.json) {
+      if (parents.length) {
+        out += '\u250f ';
+      } else {
+        out += '\u257a ';
+      }
+      out += ' ';
     }
-    out += ' ' + JSON.stringify(item);
+    out += JSON.stringify(item);
     if (parents.length) {
       out += '\n';
     }
 
-    var i = 0;
-    parents.forEach(function(p) {
-      i++;
-      if (i === parents.length) {
-        out += '\u2517\u2501 ';
-      } else {
-        out += '\u2523\u2501 ';
-      }
-      var diff = VersionedCollection.diff(item, p);
-      delete diff._id;
-      out += ' ' + p._id._id + ' ' + p._id._v + ' diff: ' + JSON.stringify(diff) + ' ' + fmtPatch(diff, p);
-      if (i !== parents.length) {
-        out += '\n';
-      }
-    });
+    if (!program.json) {
+      var i = 0;
+      parents.forEach(function(p) {
+        i++;
+        if (i === parents.length) {
+          out += '\u2517\u2501 ';
+        } else {
+          out += '\u2523\u2501 ';
+        }
+        var diff = VersionedCollection.diff(item, p);
+        delete diff._id;
+        out += ' ' + p._id._id + ' ' + p._id._v + ' diff: ' + JSON.stringify(diff) + ' ' + fmtPatch(diff, p);
+        if (i !== parents.length) {
+          out += '\n';
+        }
+      });
+    }
   } else {
     out += item._id._id;
     out += ' ' + item._id._v;
